@@ -24,3 +24,4 @@ pdf2image
 img2pdf 
 pillow
 # 우분투에 sudo apt-get install poppler-utils
+pymupdf
