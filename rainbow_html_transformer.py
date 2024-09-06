@@ -1,83 +1,60 @@
+from bs4 import BeautifulSoup, NavigableString
 from langchain.schema import Document
-from bs4 import BeautifulSoup
-from io import StringIO
-import pandas as pd
 import re
 
 class HTMLToTextWithIndentation:
-    def __init__(self):
-        self.indentation_map = {
-            'h1': 0,
-            'h2': 1,
-            'h3': 2,
-            'h4': 3,
-            'h5': 4,
-            'h6': 5,
-            'p': 1,    # 단락에 대한 기본 들여쓰기
-            'ul': 1,   # 목록에 대한 기본 들여쓰기
-            'ol': 1,
-            'li': 2    # 목록 항목에 대한 기본 들여쓰기
-        }
+    def transform_documents(self, documents: list[Document], **kwargs) -> list[Document]:
+        return [self.transform_document(doc) for doc in documents]
 
     def transform_document(self, document: Document) -> Document:
         soup = BeautifulSoup(document.page_content, 'html.parser')
-        text = self.process_element(soup.body if soup.body else soup)
-        text = re.sub(r'\n+', '\n', text).strip()
-        return Document(page_content=text, metadata=document.metadata)
+        text_content = self.html_to_text(soup)
+        return Document(page_content=text_content, metadata=document.metadata)
 
-    def process_element(self, element, current_indent=''):
-        if element.name is None:
-            text = element.strip()
-            if text:
-                return current_indent + text + '\n'
-            return ''
-        
-        if element.name == 'footer':
-            return ''
+    def html_to_text(self, soup):
+        def get_heading_level(element):
+            font_size = element.get('style', '')
+            font_size_match = re.search(r'font-size:(\d+)px', font_size)
+            if font_size_match:
+                size = int(font_size_match.group(1))
+                if size >= 24:
+                    return 1
+                elif size >= 20:
+                    return 2
+                elif size >= 16:
+                    return 3
+                else:
+                    return 4
+            return 1  # 기본값
 
-        if element.name == 'table':
-            return current_indent + self.html_table_to_markdown(element) + '\n'
+        def process_element(element):
+            if element.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+                level = get_heading_level(element)
+                return f"{'#' * level} {element.get_text().strip()}\n\n", True
+            elif element.name == 'br':
+                return '\n', False
+            elif isinstance(element, NavigableString) and element.strip():
+                return element.strip() + '\n', False
+            elif element.name == 'p':
+                return element.get_text().strip() + '\n\n', False
+            # ... (다른 요소 타입 처리)
+            return '', False
 
-        content = []
-        new_indent = self.calculate_indent(element, current_indent)
+        text_lines = []
+        processed_titles = set()
+        for element in soup.descendants:
+            processed, is_title = process_element(element)
+            if processed:
+                if is_title:
+                    title_text = processed.strip()
+                    if title_text not in processed_titles:
+                        text_lines.append(processed)
+                        processed_titles.add(title_text)
+                else:
+                    text_lines.append(processed)
 
-        if element.name == 'li':
-            list_prefix = ' ' * (len(new_indent) + 4)  # 목록 항목에 대한 들여쓰기와 함께 출력
-            lines = element.get_text(separator='\n').splitlines()
-            for line in lines:
-                if line.strip():
-                    content.append(new_indent + list_prefix + line.strip() + '\n')
-        elif element.name == 'p':
-            lines = element.get_text(separator='\n').splitlines()
-            for line in lines:
-                if line.strip():  # 빈 줄 무시
-                    content.append(new_indent + '    ' + line.strip() + '\n')
-        elif element.name == 'br':
-            content.append('\n')
-        else:
-            for child in element.children:
-                child_content = self.process_element(child, new_indent)
-                if child_content.strip():
-                    content.append(child_content)
+        # 줄 결합 및 과도한 줄바꿈 제거
+        text_content = ''.join(text_lines)
+        text_content = re.sub(r'\n{3,}', '\n\n', text_content)
 
-        return ''.join(content)
-
-    def calculate_indent(self, element, current_indent):
-        if element.name in self.indentation_map:
-            indent_level = self.indentation_map[element.name]
-            return ' ' * (indent_level * 2)  # 각 레벨당 2칸 들여쓰기 적용
-        else:
-            return current_indent
-
-    def html_table_to_markdown(self, table):
-        html_string = str(table)
-        html_io = StringIO(html_string)
-        df = pd.read_html(html_io)[0]
-        return df.to_markdown(index=False)
-
-    def transform_documents(self, documents):
-        combined_text = ""
-        for document in documents:
-            transformed_doc = self.transform_document(document)
-            combined_text += transformed_doc.page_content + "\n\n"
-        return combined_text.strip()
+        return text_content.strip()
