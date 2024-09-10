@@ -11,7 +11,7 @@ import pandas as pd
 from collections import defaultdict
 from langchain_upstage import UpstageLayoutAnalysisLoader
 from langchain.schema import Document
-from rainbow_html_transformer import HTMLToTextWithMarkdownTables
+from rainbow_html_Indentation import HTMLToTextWithMarkdownTables
 
 def convert_pdf_to_pdf(input_path, output_path):
     """PDF를 이미지로 변환한 후 다시 PDF로 변환합니다."""
