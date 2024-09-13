@@ -19,7 +19,6 @@ llama-index[all]
 llama-index-llms-upstage
 ragas[all]
 pdfplumber
-openpyxl
 pdf2image 
 img2pdf 
 pillow
@@ -27,3 +26,8 @@ pillow
 pymupdf
 PyPDF2
 tiktoken
+requests 
+beautifulsoup4 
+pandas 
+openpyxl 
+selenium
