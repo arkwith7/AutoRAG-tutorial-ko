@@ -30,4 +30,9 @@ requests
 beautifulsoup4 
 pandas 
 openpyxl 
+webdriver-manager
 selenium
+
+# pip install pip-tools
+# pip-compile requirements.txt -o requirements.lock
+# pip-sync requirements.lock
