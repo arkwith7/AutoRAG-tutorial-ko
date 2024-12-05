@@ -168,3 +168,5 @@ benchmark/resources/
 *.xlsx
 chromedriver-linux64/
 tmp/google-chrome-stable_current_amd64.deb
+
+data/pdf_docs/
