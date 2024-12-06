@@ -32,6 +32,7 @@ pandas
 openpyxl 
 webdriver-manager
 selenium
+nest_asyncio
 
 # pip install pip-tools
 # pip-compile requirements.txt -o requirements.lock
