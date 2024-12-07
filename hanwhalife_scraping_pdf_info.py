@@ -1,123 +1,180 @@
-import asyncio
 import logging
-from datetime import datetime
-import pandas as pd
+import asyncio
+import aiohttp
+import pdb
+import sys
+import traceback
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
+import ssl
+import certifi
+
+# 디버그 모드 설정
+DEBUG_MODE = True
 
 # 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('hanwhalife_scraping.log'),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s - %(message)s',
+    datefmt='%H:%M:%S'
 )
 logger = logging.getLogger(__name__)
 
+def debug_trace():
+    """간소화된 디버그 트레이스"""
+    if DEBUG_MODE:
+        logger.error("=== 디버그 정보 ===")
+        sys.exit(1)  # 프로그램 즉시 종료
+
 class HanwhaLifeScraper:
     def __init__(self):
-        self.base_url = 'https://www.hanwhalife.com'
-        self.list_url = f'{self.base_url}/main/disclosure/goods/goodslist/DF_GDGL000_P10000.do'
-        self.setup_driver()
+        logger.info("=== Initializing HanwhaLifeScraper ===")
         
-    def setup_driver(self):
-        chrome_options = Options()
-        chrome_options.add_argument('--headless=new')
-        chrome_options.add_argument('--disable-extensions')
-        chrome_options.add_argument('--disable-gpu')
+        # URL 설정
+        self.base_url = "https://www.hanwhalife.com"
+        self.list_url = f"{self.base_url}/main/disclosure/goods/goodslist/getList2.do"
+        self.detail_url = f"{self.base_url}/main/disclosure/goods/goodslist/getList3.do"
+        
+        # WebDriver 설정
+        chrome_options = webdriver.ChromeOptions()
+        chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        chrome_options.page_load_strategy = 'eager'
         
-        service = Service(ChromeDriverManager().install())
-        self.driver = webdriver.Chrome(service=service, options=chrome_options)
-        self.wait = WebDriverWait(self.driver, 30)
-
-    def get_pdf_download_url(self, file_name):
-        """PDF 다운로드 URL 생성"""
-        if not file_name:
-            return 'X'
-        base_url = "https://www.hanwhalife.com/main/disclosure/goods/download_chk.asp"
-        return f"{base_url}?file_name={file_name}"
-
-    async def get_initial_data(self):
-        """초기 데이터 가져오기"""
         try:
-            js_code = """
-                var done = arguments[arguments.length - 1];
-                
-                fetch('/main/disclosure/goods/goodslist/getList.do', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'X-Requested-With': 'XMLHttpRequest',
-                        'Accept': 'application/json, text/javascript, */*; q=0.01'
-                    },
-                    body: new URLSearchParams({
-                        'PType': '1',
-                        'sellFlag': 'Y',
-                        'schText': ''
-                    })
-                })
-                .then(response => response.json())
-                .then(data => done(data))
-                .catch(error => done({error: error.message}));
-            """
-            
-            logger.info("초기 데이터 요청 시작")
-            result = await asyncio.to_thread(
-                self.driver.execute_async_script,
-                js_code
+            self.driver = webdriver.Chrome(
+                service=ChromeService(ChromeDriverManager().install()),
+                options=chrome_options
             )
-            logger.info(f"초기 데이터 응답: {result}")
-            return result
+            self.driver.implicitly_wait(10)
+            logger.info("브라우저 초기화 완료")
             
         except Exception as e:
-            logger.error(f"초기 데이터 로드 중 오류: {str(e)}")
+            logger.error(f"브라우저 초기화 실패: {e}")
+            raise
+
+    async def initialize(self):
+        try:
+            url = f"{self.base_url}/main/disclosure/goods/goodslist/DF_GDGL000_P10000.do"
+            logger.info(f"페이지 접속: {url}")
+            
+            self.driver.get(url)
+            await asyncio.sleep(2)
+            
+            logger.info("=== 페이지 접속 완료 ===")
+            logger.info(f"Current URL: {self.driver.current_url}")
+            
+            initial_data = await self.get_initial_data()
+            if initial_data:
+                logger.info("초기 데이터 로드 완료")
+                return initial_data
+            return None
+            
+        except Exception as e:
+            logger.error(f"초기화 실패: {str(e)}")
+            debug_trace()
             return None
 
-    async def get_product_details(self, sell_type, goods_type):
-        """상품 목록 조회"""
-        js_code = """
-            var done = arguments[arguments.length - 1];
+    async def get_product_list(self, sell_type, goods_type):
+        try:
+            logger.info(f"상품 목록 요청: {sell_type}-{goods_type}")
             
-            fetch('/main/disclosure/goods/goodslist/getList.do', {
+            script = f"""
+            var done = arguments[0];
+            fetch('/main/disclosure/goods/goodslist/getList2.do', {{
                 method: 'POST',
-                headers: {
+                headers: {{
                     'Content-Type': 'application/x-www-form-urlencoded',
                     'X-Requested-With': 'XMLHttpRequest'
-                },
-                body: new URLSearchParams({
+                }},
+                body: new URLSearchParams({{
+                    'goodsType': '{goods_type}',
+                    'sellType': '{sell_type}',
+                    'goodsIndex': '',
                     'PType': '1',
-                    'sellFlag': 'Y',
-                    'sellType': arguments[0],
-                    'goodsType': arguments[1]
-                })
-            })
+                    'sellFlag': 'Y'
+                }})
+            }})
             .then(response => response.json())
             .then(data => done(data))
-            .catch(error => done({error: error.message}));
-        """
-        
-        return await asyncio.to_thread(
-            self.driver.execute_async_script,
-            js_code, sell_type, goods_type
-        )
+            .catch(error => done({ error: error.message }));
+            """
+            
+            response = await self.driver.execute_async_script(script)
+            
+            if response and 'list2' in response:
+                logger.info(f"상품 {len(response['list2'])}개 수신")
+                return response['list2']
+            return None
+            
+        except Exception as e:
+            logger.error(f"상품 목록 요청 실패: {str(e).split('Stacktrace')[0]}")
+            if DEBUG_MODE:
+                debug_trace()
+            return None
 
-    def get_product_specific_info(self, idx, sell_type, goods_type):
-        """상품 상세 정보 조회"""
+    async def get_product_detail(self, idx, sell_type, goods_type):
         try:
-            js_code = """
-                var done = arguments[arguments.length - 1];
-                
-                fetch('/main/disclosure/goods/goodslist/getGoodsInfo.do', {
+            if DEBUG_MODE:
+                logger.info(f"=== Getting product detail for idx: {idx} ===")
+            
+            script = f"""
+            return await fetch('/main/disclosure/goods/goodslist/getList3.do', {{
+                method: 'POST',
+                headers: {{
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }},
+                body: new URLSearchParams({{
+                    'goodsIndex': '{idx}',
+                    'sellType': '{sell_type}',
+                    'goodsType': '{goods_type}',
+                    'PType': '1',
+                    'sellFlag': 'Y'
+                }})
+            }}).then(response => response.json());
+            """
+            
+            response = await self.driver.execute_async_script(script)
+            
+            if response and 'list3' in response:
+                return response['list3']
+            return None
+            
+        except Exception as e:
+            logger.error(f"상품 상세 정보 요청 실패: {str(e)}")
+            if DEBUG_MODE:
+                logger.error(f"Exception details: {traceback.format_exc()}")
+                debug_trace()
+            return None
+
+    def cleanup(self):
+        try:
+            if hasattr(self, 'driver') and self.driver:
+                self.driver.quit()
+                logger.info("브라우저 종료")
+        except Exception as e:
+            logger.error(f"브라우저 종료 실패: {e}")
+
+    def __del__(self):
+        self.cleanup()
+
+    async def get_initial_data(self):
+        try:
+            logger.info("데이터 요청 시작")
+            
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.ID, "List1"))
+            )
+            
+            script = """
+            return new Promise((resolve) => {
+                fetch('/main/disclosure/goods/goodslist/getList.do', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/x-www-form-urlencoded',
@@ -125,90 +182,111 @@ class HanwhaLifeScraper:
                     },
                     body: new URLSearchParams({
                         'PType': '1',
-                        'sellFlag': 'Y',
-                        'sellType': arguments[1],
-                        'goodsType': arguments[2],
-                        'goodsIndex': arguments[0]
+                        'sellFlag': 'Y'
                     })
                 })
                 .then(response => response.json())
-                .then(data => done(data))
-                .catch(error => done({error: error.message}));
+                .then(data => resolve(data))
+                .catch(error => resolve({ error: error.message }));
+            });
             """
             
-            return self.driver.execute_async_script(js_code, idx, sell_type, goods_type)
+            response = await self.driver.execute_async_script(script)
+            
+            if response and not isinstance(response, dict):
+                logger.info("데이터 수신 성공")
+                return response
+            else:
+                logger.error(f"데이터 수신 실패: {response if isinstance(response, dict) else '알 수 없는 오류'}")
+                debug_trace()
+                return None
             
         except Exception as e:
-            logger.error(f"상품 상세 정보 조회 중 오류: {str(e)}")
+            logger.error(f"요청 실패: {str(e).split('Stacktrace')[0]}")
+            debug_trace()
             return None
 
-    async def scrape(self):
+    async def process_category(self, sell_type, goods_type, category_name):
+        """카테고리별 처리를 수행하는 메서드"""
         try:
-            self.driver.get(self.list_url)
-            logger.info("페이지 접속 완료")
+            if DEBUG_MODE:
+                logger.info(f"\n=== Processing category: {category_name} ===")
+                logger.info(f"sell_type: {sell_type}, goods_type: {goods_type}")
             
-            # JavaScript 로딩 대기
-            self.wait.until(EC.presence_of_element_located((By.ID, "LIST_GRID1")))
-            await asyncio.sleep(3)
+            products = await self.get_product_list(sell_type, goods_type)
             
-            # 초기 데이터 요청
-            data = await self.get_initial_data()
-            
-            if isinstance(data, dict) and 'list1' in data:
-                excel_data = []
+            if not products:
+                logger.error("상품 목록을 가져오지 못했습니다")
+                if DEBUG_MODE:
+                    debug_trace()
+                return
                 
-                for product_type in data['list1']:
-                    sell_type = product_type['SELL_TYPE']
-                    goods_type = product_type['GOODS_TYPE']
-                    category = f"{product_type['SELL_TYPE_NM']} {product_type['GOODS_TYPE_NM']}"
-                    logger.info(f"처리 중: {category}")
-                    
-                    details = await self.get_product_details(sell_type, goods_type)
-                    
-                    if details and 'list2' in details:
-                        logger.info(f"발견된 상품 수: {len(details['list2'])}")
-                        
-                        for product in details['list2']:
-                            logger.info(f"상품 처리 중: {product['GOODS_NAME']}")
-                            
-                            specific_info = self.get_product_specific_info(
-                                product['IDX'],
-                                sell_type,
-                                goods_type
-                            )
-                            
-                            if specific_info and 'list3' in specific_info:
-                                for doc in specific_info['list3']:
-                                    row = {
-                                        '판매구분': '판매중' if not doc.get('SELL_END_DT', '').strip() else '판매중지',
-                                        '판매사': '한화생명',
-                                        '분류': category,
-                                        '상품명': product['GOODS_NAME'],
-                                        '판매기간': f"{doc.get('SELL_START_DT', '')} ~ {'현재' if not doc.get('SELL_END_DT', '').strip() else doc['SELL_END_DT']}",
-                                        '요약서': self.get_pdf_download_url(doc.get('FILE_NAME1')),
-                                        '방법서': self.get_pdf_download_url(doc.get('FILE_NAME2')),
-                                        '약관': self.get_pdf_download_url(doc.get('FILE_NAME3'))
-                                    }
-                                    excel_data.append(row)
-                            
-                            await asyncio.sleep(1)
-                    await asyncio.sleep(2)
-                
-                if excel_data:
-                    self.save_to_excel(excel_data)
-                else:
-                    logger.warning("수집된 데이터가 없습니다.")
+            logger.info(f"받은 상품 수: {len(products)}")
+            if products:
+                logger.info(f"첫 번째 상품 샘플: {products[0]}")
             
+            for product in products[:3]:  # 테스트를 위해 3개만 처리
+                product_name = product['GOODS_NAME']
+                idx = product['IDX']
+                
+                logger.info(f"\n--- 상품 처리 시작 ---")
+                logger.info(f"상품명: {product_name}")
+                
+                pdf_info = await self.get_product_detail(
+                    idx=idx,
+                    sell_type=sell_type,
+                    goods_type=goods_type
+                )
+                
+                if pdf_info:
+                    if DEBUG_MODE:
+                        logger.info(f"PDF 정보: {pdf_info}")
+                    # PDF 정보 저장 로직 구현 필요
+                    pass
+                    
+                await asyncio.sleep(1)
+                
         except Exception as e:
-            logger.error(f"스크래핑 중 오류 발생: {str(e)}")
-            logger.error(f"페이지 소스: {self.driver.page_source[:500]}")
-            
-        finally:
-            self.driver.quit()
+            logger.error(f"카테고리 처리 중 오류 발생: {str(e)}")
+            if DEBUG_MODE:
+                debug_trace()
 
 async def main():
-    scraper = HanwhaLifeScraper()
-    await scraper.scrape()
+    scraper = None
+    try:
+        logger.info("=== 프로그램 시작 ===")
+        scraper = HanwhaLifeScraper()
+        initial_data = await scraper.initialize()
+        
+        if not initial_data:
+            logger.error("초기화 실패")
+            return
+            
+        if initial_data and 'list1' in initial_data:
+            categories = [
+                ('SA', 'GA', '개인 보장성'),
+                ('SA', 'GB', '개인 연금')
+            ]
+            
+            for sell_type, goods_type, category_name in categories:
+                if DEBUG_MODE:
+                    logger.info(f"\n=== Processing category: {category_name} ===")
+                await scraper.process_category(sell_type, goods_type, category_name)
+                await asyncio.sleep(3)
+                
+    except Exception as e:
+        logger.error(f"실행 중 오류 발생: {e}")
+        debug_trace()
+    finally:
+        if scraper:
+            scraper.cleanup()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("\n=== 프로그램 중단됨 ===")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"예상치 못한 오류: {e}")
+        debug_trace()
